@@ -9,9 +9,13 @@ from google.genai import types
 from PIL import Image
 import io, re, os, datetime, base64
 import json
+import requests
 
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Get proxy from environment variables (set by Apache/system)
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("http_proxy") or os.getenv("HTTP_PROXY")
 
 st.set_page_config(
     page_title="VidBlog AI",
@@ -470,6 +474,49 @@ def extract_video_id(url: str):
 def get_thumbnail_url(vid: str) -> str:
     return f"https://img.youtube.com/vi/{vid}/maxresdefault.jpg"
 
+def fetch_transcript_with_proxy(vid: str):
+    """Fetch transcript using system proxy (Apache/environment)."""
+    import time
+    from urllib.request import ProxyHandler, build_opener
+    
+    # Build proxy dict from environment or explicit config
+    proxies = {}
+    if PROXY_URL:
+        proxies = {
+            "http": PROXY_URL,
+            "https": PROXY_URL,
+        }
+    
+    ytt = YouTubeTranscriptApi()
+    
+    # Configure requests session with proxy
+    if proxies:
+        session = requests.Session()
+        session.proxies.update(proxies)
+        # Inject session into transcript API
+        ytt.http_client = session
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            tlist = ytt.list(vid)
+            try:
+                transcript = tlist.find_transcript(['en','en-US','en-GB','hi','ur'])
+            except NoTranscriptFound:
+                transcript = next(iter(tlist))
+            return transcript.fetch()
+        except Exception as e:
+            error_msg = str(e).lower()
+            # Check if it's an IP blocking error
+            is_ip_blocked = any(x in error_msg for x in ['ip', 'blocked', 'request', 'forbidden'])
+            
+            if attempt < max_retries - 1 and is_ip_blocked:
+                wait_time = 2 ** attempt  # exponential backoff: 1s, 2s, 4s
+                st.info(f"⏳ Retrying in {wait_time}s... (attempt {attempt+1}/{max_retries})")
+                time.sleep(wait_time)
+            else:
+                raise
+
 def render_steps(active=None, done=None):
     done = done or []
     items = [("1","Transcript"),("2","Context"),("3","Blog"),("4","Cover"),("5","Done")]
@@ -624,21 +671,21 @@ with _logo_col:
 # push logo to left by using spacer; buttons go right
 with _c2:
     st.markdown(f'<div class="nav-col{"  nav-btn-active" if is_gen else " nav-col"}">', unsafe_allow_html=True)
-    if st.button("✨ Generate", key="nav_gen", use_container_width=True):
+    if st.button("✨ Generate", key="nav_gen", width='stretch'):
         st.session_state.page = "generate"
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
 with _c3:
     st.markdown(f'<div class="nav-col{"  nav-btn-active" if is_hist else " nav-col"}">', unsafe_allow_html=True)
-    if st.button(f"📂 History ({hist_count})", key="nav_hist", use_container_width=True):
+    if st.button(f"📂 History ({hist_count})", key="nav_hist", width='stretch'):
         st.session_state.page = "history"
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
 with _c4:
     st.markdown('<div class="nav-col">', unsafe_allow_html=True)
-    if st.button(f"{_theme_icon} {_theme_label}", key="nav_theme", use_container_width=True):
+    if st.button(f"{_theme_icon} {_theme_label}", key="nav_theme", width='stretch'):
         st.session_state.dark_mode = not st.session_state.dark_mode
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
@@ -680,8 +727,8 @@ if st.session_state.page == "history":
             st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
             # Cover image
-            if vb["img_path"]:
-                st.image(vb["img_path"], use_container_width=True)
+            if vb["img_path"] and os.path.exists(vb["img_path"]):
+                st.image(vb["img_path"], width='stretch')
                 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
             # Stats
@@ -714,14 +761,14 @@ if st.session_state.page == "history":
             with dl1:
                 st.download_button("📄 Blog (.md)", data=vb["content"],
                     file_name=vb["fn"], mime="text/markdown",
-                    use_container_width=True, key="hist_dl_blog")
+                    width='stretch', key="hist_dl_blog")
             with dl2:
-                if vb["img_path"]:
+                if vb["img_path"] and os.path.exists(vb["img_path"]):
                     with open(vb["img_path"], "rb") as imgf:
                         img_bytes = imgf.read()
                     st.download_button("🖼️ Cover (.png)", data=img_bytes,
                         file_name=vb["img_fn"], mime="image/png",
-                        use_container_width=True, key="hist_dl_img")
+                        width='stretch', key="hist_dl_img")
 
         else:
             # ── GRID VIEW ──
@@ -773,13 +820,13 @@ if st.session_state.page == "history":
                 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
                 pg_cols = st.columns([1, 2, 1])
                 with pg_cols[0]:
-                    if st.button("← Prev", disabled=st.session_state.hist_page == 0, use_container_width=True, key="hist_prev"):
+                    if st.button("← Prev", disabled=st.session_state.hist_page == 0, width='stretch', key="hist_prev"):
                         st.session_state.hist_page -= 1
                         st.rerun()
                 with pg_cols[1]:
                     st.markdown(f"<div style='text-align:center;color:{MUTED};font-size:12px;padding-top:8px'>Page {st.session_state.hist_page+1} of {total_pages}</div>", unsafe_allow_html=True)
                 with pg_cols[2]:
-                    if st.button("Next →", disabled=st.session_state.hist_page >= total_pages - 1, use_container_width=True, key="hist_next"):
+                    if st.button("Next →", disabled=st.session_state.hist_page >= total_pages - 1, width='stretch', key="hist_next"):
                         st.session_state.hist_page += 1
                         st.rerun()
 
@@ -796,7 +843,7 @@ if st.session_state.page == "history":
 
             with act1:
                 st.markdown('<div class="view-btn">', unsafe_allow_html=True)
-                if st.button("👁️ View Blog", key="view_sel", use_container_width=True):
+                if st.button("👁️ View Blog", key="view_sel", width='stretch'):
                     st.session_state.view_blog = selected
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -804,11 +851,11 @@ if st.session_state.page == "history":
             with act2:
                 st.download_button("📄 Download .md", data=selected["content"],
                     file_name=selected["fn"], mime="text/markdown",
-                    use_container_width=True, key="dl_sel_blog")
+                    width='stretch', key="dl_sel_blog")
 
             with act3:
                 st.markdown('<div class="del-btn">', unsafe_allow_html=True)
-                if st.button("🗑️ Delete", key="del_sel", use_container_width=True):
+                if st.button("🗑️ Delete", key="del_sel", width='stretch'):
                     try:
                         os.remove(selected["path"])
                         if selected["img_path"]:
@@ -902,7 +949,7 @@ blog_tone = st.radio("Tone",
 
 st.markdown('<div class="fdivider"></div>', unsafe_allow_html=True)
 st.markdown('<div class="gen-btn">', unsafe_allow_html=True)
-generate_btn = st.button("🚀  Generate Blog Post", use_container_width=True, key="gen_btn")
+generate_btn = st.button("🚀  Generate Blog Post", width='stretch', key="gen_btn")
 st.markdown('</div>', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)  # /fcard
 
@@ -921,12 +968,8 @@ if generate_btn:
             try:
                 with st.spinner("📥 Fetching transcript..."):
                     steps_ph.markdown(render_steps(active="Transcript"), unsafe_allow_html=True)
-                    ytt = YouTubeTranscriptApi()
-                    tlist = ytt.list(vid)
-                    try:    transcript = tlist.find_transcript(['en','en-US','en-GB','hi','ur'])
-                    except NoTranscriptFound: transcript = next(iter(tlist))
-                    data = transcript.fetch()
-                    full_text = " ".join([e.text for e in data])
+                    data = fetch_transcript_with_proxy(vid)
+                    full_text = " ".join([e['text'] for e in data])
                     word_count = len(full_text.split())
 
                 with st.spinner("🧠 Building semantic context..."):
@@ -1073,7 +1116,7 @@ if st.session_state.blog_content:
 
     # Cover image
     if cb:
-        st.image(io.BytesIO(cb), use_container_width=True)
+        st.image(io.BytesIO(cb), width='stretch')
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
     # Tabs: Preview | Raw Markdown
@@ -1108,13 +1151,13 @@ if st.session_state.blog_content:
         d1, d2 = st.columns(2)
         with d1:
             st.download_button("📄 Blog (.md)", data=bc, file_name=bf,
-                mime="text/markdown", use_container_width=True, key="dl_blog")
+                mime="text/markdown", width='stretch', key="dl_blog")
         with d2:
             st.download_button("🖼️ Cover Image (.png)", data=cb, file_name=imf,
-                mime="image/png", use_container_width=True, key="dl_img")
+                mime="image/png", width='stretch', key="dl_img")
     else:
         st.download_button("📄 Download Blog (.md)", data=bc, file_name=bf,
-            mime="text/markdown", use_container_width=True, key="dl_blog")
+            mime="text/markdown", width='stretch', key="dl_blog")
 
     st.markdown('</div>', unsafe_allow_html=True)  # /rcard
 

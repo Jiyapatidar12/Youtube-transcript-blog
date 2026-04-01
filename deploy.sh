@@ -107,6 +107,13 @@ else
     echo "✅ .env file already exists"
 fi
 
+# Export proxy settings from system environment for PM2
+if [ -n "$http_proxy" ] || [ -n "$HTTP_PROXY" ]; then
+    echo "✅ System proxy detected - will be passed to PM2"
+else
+    echo "ℹ️  No system proxy detected"
+fi
+
 # Step 7: Set permissions and create directories
 echo ""
 echo "Step 7/8: Setting up directories..."
@@ -133,10 +140,11 @@ if pm2 list | grep -q "yt2blog-3030"; then
     echo "✅ PM2 process restarted"
 else
     echo "🚀 Starting new PM2 process..."
-    # Start with PM2
+    # Start with PM2, passing environment variables including proxy
     pm2 start venv/bin/streamlit \
         --name yt2blog-3030 \
         --interpreter none \
+        --env "http_proxy=$http_proxy,https_proxy=$https_proxy,HTTP_PROXY=$HTTP_PROXY,HTTPS_PROXY=$HTTPS_PROXY" \
         -- run app.py \
         --server.port=3030 \
         --server.address=0.0.0.0 \
