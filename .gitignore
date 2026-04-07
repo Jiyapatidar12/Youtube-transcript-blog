@@ -19,5 +19,3 @@ venv/
 .DS_Store
 Thumbs.db
 
-# YouTube cookies (sensitive)
-cookies.txt
